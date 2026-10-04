@@ -1,49 +1,67 @@
-Kubernetes Architecture 
-Kubernetes is a container orchestration platform used to deploy, manage, scale, and maintain containerized applications.
+# Kubernetes Architecture
+
+Kubernetes is a container orchestration platform used to deploy, manage,
+scale, and maintain containerized applications.
+
 At a high level, a Kubernetes cluster consists of two main parts:
+
 1. Control Plane — manages the cluster
-2. Worker Nodes — run the applications
-🔹 Control Plane
-The Control Plane is responsible for managing the overall state of the Kubernetes cluster.
-API Server
-The central communication point of Kubernetes. Tools such as kubectl communicate with the cluster through the API Server.
-etcd
-A distributed key-value store that keeps the Kubernetes cluster state and configuration.
-Scheduler
-Decides which suitable Worker Node should run a newly created Pod based on available resources and scheduling requirements.
-Controller Manager
-Runs controllers that continuously compare the desired state with the actual state and take corrective action when required.
-🔹 Worker Node
-Worker Nodes are where application workloads actually run.
-Kubelet
-An agent running on each Worker Node. It ensures that the Pods assigned to the node are running as expected.
-Container Runtime
-Responsible for actually running the containers inside Pods. Examples include containerd and CRI-O.
-kube-proxy
-Helps implement Kubernetes Service networking and route Service traffic toward the appropriate Pods.
-Pod
-The smallest deployable unit in Kubernetes. A Pod contains one or more containers that run the application workload.
-🔹 Simple Architecture
+2. Worker Nodes — run the application workloads
+
+## Control Plane
+
+### API Server
+The central communication point of Kubernetes.
+
+### etcd
+A distributed key-value store that stores Kubernetes cluster state.
+
+### Scheduler
+Selects a suitable Worker Node for a new Pod.
+
+### Controller Manager
+Runs controllers that maintain the desired state of the cluster.
+
+## Worker Node
+
+### Kubelet
+An agent that manages Pods assigned to the Worker Node.
+
+### Container Runtime
+Runs the containers inside Pods.
+
+Examples:
+- containerd
+- CRI-O
+
+### kube-proxy
+Helps implement Kubernetes Service networking.
+
+### Pod
+The smallest deployable unit in Kubernetes.
+
+## Simple Architecture
+
+```text
                     Kubernetes Cluster
-                           │
-             ┌─────────────┴─────────────┐
-             │                           │
-       CONTROL PLANE                 WORKER NODE
-        Manages cluster              Runs workloads
-             │                           │
-      ┌──────┼──────┐             ┌──────┼──────┐
-      │      │      │             │      │      │
-    API     etcd  Scheduler    Kubelet Runtime kube-proxy
+                           |
+             +-------------+-------------+
+             |                           |
+       CONTROL PLANE                WORKER NODE
+       Manages cluster              Runs workloads
+             |                           |
+      +------+------+              +-----+------+
+      |      |      |              |     |      |
+    API    etcd  Scheduler       Kubelet Runtime kube-proxy
    Server
-      │
+      |
  Controller
  Manager
-                                      │
-                                      ▼
+                                      |
+                                      v
                                      Pod
-                                      │
-                                   Container
-
+                                      |
+                                  Container
 🔑 Easy way to remember
 Control Plane → Decides and manages
 Worker Node → Runs the workload
