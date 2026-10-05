@@ -249,3 +249,4 @@ Depending on the configuration, kube-proxy can use mechanisms such as:
 - IPVS
 
 > **
+<img width="1536" height="1024" alt="kubernetes_Architecture" src="https://github.com/user-attachments/assets/b3527a83-19e0-4986-b043-ed3d45043c30" />
