@@ -1,0 +1,491 @@
+# Kubernetes Deployments -- Theory & Interview Notes
+
+## Overview
+
+A Kubernetes **Deployment** manages a set of Pods and provides
+declarative updates, scaling, self-healing through ReplicaSets, rollout
+history, and rollback.
+
+The basic relationship is:
+
+``` text
+Deployment
+    |
+    v
+ReplicaSet
+    |
+    v
+Pods
+```
+
+The Deployment manages the ReplicaSet. The ReplicaSet ensures that the
+desired number of Pods are running.
+
+------------------------------------------------------------------------
+
+# 1. Deployment Basics and Pod Self-Healing
+
+A Deployment defines the desired state of an application.
+
+Example:
+
+``` yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.26
+```
+
+If the desired replica count is 3 and one Pod is deleted manually, the
+ReplicaSet detects that only 2 Pods are running and creates a
+replacement.
+
+### Key interview point
+
+**Who recreates a deleted Pod?**
+
+The **ReplicaSet controller** recreates it. The Deployment manages the
+ReplicaSet.
+
+------------------------------------------------------------------------
+
+# 2. Scaling a Deployment
+
+Scaling changes the number of desired Pod replicas.
+
+### Imperative scaling
+
+``` bash
+kubectl scale deployment nginx-deployment --replicas=5
+```
+
+This directly changes the live Deployment.
+
+### Declarative scaling
+
+Change:
+
+``` yaml
+replicas: 5
+```
+
+and apply:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+### Difference
+
+  -----------------------------------------------------------------------
+  Method                              Use
+  ----------------------------------- -----------------------------------
+  `kubectl scale`                     Quick operational/manual change
+
+  YAML + `kubectl apply`              Declarative, repeatable,
+                                      version-controlled configuration
+  -----------------------------------------------------------------------
+
+For production and GitOps workflows, declarative configuration is
+generally preferred.
+
+------------------------------------------------------------------------
+
+# 3. Updating the Deployment Image
+
+A Deployment image can be updated with:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.27
+```
+
+The syntax is:
+
+``` text
+kubectl set image deployment <deployment-name> <container-name>=<new-image>
+```
+
+For a RollingUpdate, Kubernetes creates a new ReplicaSet and gradually
+replaces Pods from the old ReplicaSet with Pods from the new ReplicaSet.
+
+Useful commands:
+
+``` bash
+kubectl get pods -w
+kubectl rollout status deployment nginx-deployment
+kubectl get rs
+```
+
+### Rollout flow
+
+``` text
+Deployment
+    |
+    +--> Old ReplicaSet --> Old Pods
+    |
+    +--> New ReplicaSet --> New Pods
+```
+
+The old ReplicaSet is gradually scaled down while the new ReplicaSet is
+scaled up.
+
+------------------------------------------------------------------------
+
+# 4. RollingUpdate, maxSurge and maxUnavailable
+
+A Deployment can explicitly configure:
+
+``` yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 1
+```
+
+Assume:
+
+``` yaml
+replicas: 4
+```
+
+### maxSurge
+
+`maxSurge` defines how many Pods may temporarily exist above the desired
+replica count during an update.
+
+With 4 replicas and:
+
+``` yaml
+maxSurge: 1
+```
+
+the Deployment can temporarily have up to 5 Pods.
+
+### maxUnavailable
+
+`maxUnavailable` defines how many Pods can be unavailable during the
+update.
+
+With 4 replicas and:
+
+``` yaml
+maxUnavailable: 1
+```
+
+the rollout should maintain at least 3 available Pods.
+
+### Easy memory trick
+
+``` text
+maxSurge       = extra Pods allowed
+maxUnavailable = unavailable Pods allowed
+```
+
+They can also be percentages:
+
+``` yaml
+maxSurge: 25%
+maxUnavailable: 25%
+```
+
+------------------------------------------------------------------------
+
+# 5. Stalled Rollout
+
+A rollout can stall when new Pods fail to become Ready.
+
+Example of an intentionally invalid image:
+
+``` yaml
+image: nginx:doesnotexist
+```
+
+Apply the update:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+Observe:
+
+``` bash
+kubectl get pods -w
+kubectl rollout status deployment nginx-deployment
+```
+
+The new Pod may show:
+
+``` text
+ErrImagePull
+ImagePullBackOff
+```
+
+The rollout cannot complete because the new Pods are not becoming Ready.
+
+A timeout can make the behavior easier to demonstrate:
+
+``` bash
+kubectl rollout status deployment nginx-deployment --timeout=60s
+```
+
+Troubleshoot with:
+
+``` bash
+kubectl describe pod <pod-name>
+kubectl get rs
+kubectl describe deployment nginx-deployment
+```
+
+### Important distinction
+
+`ImagePullBackOff` means Kubernetes cannot pull the image.
+
+`CrashLoopBackOff` means the container starts but repeatedly crashes.
+
+------------------------------------------------------------------------
+
+# 6. Rollout History and Revisions
+
+Every change to the Deployment Pod template can create a new revision.
+
+View history:
+
+``` bash
+kubectl rollout history deployment nginx-deployment
+```
+
+Inspect a specific revision:
+
+``` bash
+kubectl rollout history deployment nginx-deployment --revision=11
+```
+
+Revision history helps identify previous application
+versions/configurations.
+
+A Deployment commonly uses ReplicaSets to represent different
+Pod-template revisions.
+
+------------------------------------------------------------------------
+
+# 7. Rollback to a Specific Revision
+
+Rollback to the immediately previous revision:
+
+``` bash
+kubectl rollout undo deployment nginx-deployment
+```
+
+Rollback to a specific revision:
+
+``` bash
+kubectl rollout undo deployment nginx-deployment --to-revision=11
+```
+
+Then verify:
+
+``` bash
+kubectl rollout status deployment nginx-deployment
+```
+
+Check the image:
+
+``` bash
+kubectl get deployment nginx-deployment \
+  -o=jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+### Important
+
+Do not assume revision numbers such as 1, 2, or 11. Always check:
+
+``` bash
+kubectl rollout history deployment nginx-deployment
+```
+
+and use the revision number that actually exists in the cluster.
+
+------------------------------------------------------------------------
+
+# 8. RollingUpdate vs Recreate
+
+## RollingUpdate
+
+``` yaml
+strategy:
+  type: RollingUpdate
+```
+
+Old Pods are gradually replaced by new Pods.
+
+``` text
+Old Old Old Old
+      |
+Old Old Old New
+      |
+Old Old New New
+      |
+Old New New New
+      |
+New New New New
+```
+
+Advantages:
+
+-   Designed to maintain availability
+-   Controlled replacement
+-   Old and new versions can temporarily coexist
+
+## Recreate
+
+``` yaml
+strategy:
+  type: Recreate
+```
+
+All old Pods are terminated before new Pods are created.
+
+``` text
+Old Old Old
+     |
+   No Pods
+     |
+New New New
+```
+
+Advantages:
+
+-   Simple
+-   Useful when old and new versions cannot safely run together
+
+Disadvantage:
+
+-   Causes a downtime window during replacement
+
+### Important interview point
+
+RollingUpdate does not automatically guarantee zero downtime.
+Application readiness, readiness probes, replica count, and rollout
+configuration all matter.
+
+------------------------------------------------------------------------
+
+# Important Deployment Commands
+
+``` bash
+kubectl apply -f deployment.yaml
+kubectl get deployment
+kubectl describe deployment <name>
+kubectl get pods
+kubectl get pods -w
+kubectl get rs
+kubectl scale deployment <name> --replicas=4
+kubectl set image deployment <name> <container>=<image>
+kubectl rollout status deployment <name>
+kubectl rollout history deployment <name>
+kubectl rollout history deployment <name> --revision=<number>
+kubectl rollout undo deployment <name>
+kubectl rollout undo deployment <name> --to-revision=<number>
+kubectl rollout restart deployment <name>
+kubectl rollout pause deployment <name>
+kubectl rollout resume deployment <name>
+```
+
+------------------------------------------------------------------------
+
+# Interview Questions to Remember
+
+### Who recreates a deleted Pod?
+
+ReplicaSet.
+
+### Who manages the ReplicaSet?
+
+Deployment.
+
+### What is maxSurge?
+
+Maximum number of extra Pods allowed above the desired replica count
+during a RollingUpdate.
+
+### What is maxUnavailable?
+
+Maximum number of Pods allowed to be unavailable during a RollingUpdate.
+
+### What happens when a new image is deployed?
+
+A new ReplicaSet is created and Pods are gradually replaced according to
+the rollout strategy.
+
+### How do you check rollout status?
+
+``` bash
+kubectl rollout status deployment <name>
+```
+
+### How do you see revision history?
+
+``` bash
+kubectl rollout history deployment <name>
+```
+
+### How do you roll back to a specific revision?
+
+``` bash
+kubectl rollout undo deployment <name> --to-revision=<number>
+```
+
+### RollingUpdate vs Recreate?
+
+RollingUpdate gradually replaces Pods; Recreate terminates the old Pods
+first and then creates the new Pods.
+
+------------------------------------------------------------------------
+
+# Mental Model
+
+``` text
+Deployment
+   |
+   +--> ReplicaSet
+          |
+          +--> Pod
+          +--> Pod
+          +--> Pod
+
+Update image
+   |
+   v
+New ReplicaSet
+   |
+   v
+RollingUpdate
+   |
+   +--> maxSurge
+   +--> maxUnavailable
+   |
+   v
+New Pods Ready
+   |
+   v
+Old Pods Removed
+
+Revision History
+   |
+   v
+Rollback
+```
