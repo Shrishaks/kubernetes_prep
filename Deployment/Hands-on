@@ -1,0 +1,717 @@
+# Kubernetes Deployments -- 8 Hands-On Labs
+
+This document records the practical exercises performed with an Nginx
+Deployment.
+
+## Lab Environment
+
+Application:
+
+``` text
+nginx
+```
+
+Deployment:
+
+``` text
+nginx-deployment
+```
+
+Main YAML file:
+
+``` text
+deployment.yaml
+```
+
+Basic Deployment:
+
+``` yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.26
+          ports:
+            - containerPort: 80
+```
+
+------------------------------------------------------------------------
+
+# Question 1 -- Delete a Pod and Observe Self-Healing
+
+## Objective
+
+Deploy Nginx with 3 replicas, manually delete one Pod, observe a
+replacement, and identify the controller responsible.
+
+## Commands
+
+Apply:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+Check Deployment:
+
+``` bash
+kubectl get deployment
+```
+
+Check Pods:
+
+``` bash
+kubectl get pods
+```
+
+Check ReplicaSet:
+
+``` bash
+kubectl get rs
+```
+
+Delete one Pod:
+
+``` bash
+kubectl delete pod <pod-name>
+```
+
+Watch Pods:
+
+``` bash
+kubectl get pods -w
+```
+
+## Expected behavior
+
+Before deletion:
+
+``` text
+3 Pods Running
+```
+
+After deleting one:
+
+``` text
+2 Pods
+```
+
+The ReplicaSet detects that the desired count is 3 and creates a
+replacement:
+
+``` text
+2 Pods
+   |
+ReplicaSet detects difference
+   |
+New Pod created
+   |
+3 Pods Running
+```
+
+## Key learning
+
+The **ReplicaSet controller** performs the replacement.
+
+Deployment manages the ReplicaSet.
+
+------------------------------------------------------------------------
+
+# Question 2 -- Scale Deployment Up and Down
+
+## Objective
+
+Scale the Deployment using `kubectl scale`, then use YAML +
+`kubectl apply`.
+
+## Part A -- Imperative scaling
+
+Scale up:
+
+``` bash
+kubectl scale deployment nginx-deployment --replicas=5
+```
+
+Verify:
+
+``` bash
+kubectl get deployment nginx-deployment
+kubectl get pods
+```
+
+Scale down:
+
+``` bash
+kubectl scale deployment nginx-deployment --replicas=2
+```
+
+Verify:
+
+``` bash
+kubectl get deployment nginx-deployment
+kubectl get pods
+```
+
+## Part B -- YAML scaling
+
+Edit:
+
+``` bash
+vi deployment.yaml
+```
+
+Change:
+
+``` yaml
+replicas: 3
+```
+
+to:
+
+``` yaml
+replicas: 4
+```
+
+Apply:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+Verify:
+
+``` bash
+kubectl get deployment nginx-deployment
+kubectl get pods
+```
+
+## Key learning
+
+`kubectl scale` directly changes the live Deployment.
+
+YAML + `kubectl apply` represents the desired state declaratively and is
+better suited for version control and GitOps workflows.
+
+------------------------------------------------------------------------
+
+# Question 3 -- Update Image and Watch RollingUpdate
+
+## Objective
+
+Change the Nginx image and observe Kubernetes perform a RollingUpdate.
+
+Check current image:
+
+``` bash
+kubectl get deployment nginx-deployment \
+  -o=jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+Watch Pods:
+
+``` bash
+kubectl get pods -w
+```
+
+In another terminal:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.27
+```
+
+Check rollout:
+
+``` bash
+kubectl rollout status deployment nginx-deployment
+```
+
+Check ReplicaSets:
+
+``` bash
+kubectl get rs
+```
+
+Verify final image:
+
+``` bash
+kubectl get deployment nginx-deployment \
+  -o=jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+## Expected flow
+
+``` text
+Deployment
+    |
+    +--> Old ReplicaSet
+    |
+    +--> New ReplicaSet
+              |
+              +--> New Pods
+```
+
+The new ReplicaSet is scaled up while the old ReplicaSet is scaled down.
+
+------------------------------------------------------------------------
+
+# Question 4 -- Configure maxSurge and maxUnavailable
+
+## Objective
+
+Explicitly configure RollingUpdate behavior and understand the Pod
+limits during an update.
+
+Use:
+
+``` yaml
+spec:
+  replicas: 4
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+```
+
+Full relevant section:
+
+``` yaml
+spec:
+  replicas: 4
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+```
+
+Apply:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+Verify:
+
+``` bash
+kubectl get deployment nginx-deployment
+```
+
+Check configuration:
+
+``` bash
+kubectl get deployment nginx-deployment -o yaml | grep -A5 rollingUpdate
+```
+
+Watch Pods:
+
+``` bash
+kubectl get pods -w
+```
+
+Trigger update:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.27
+```
+
+Check rollout:
+
+``` bash
+kubectl rollout status deployment nginx-deployment
+```
+
+## With 4 replicas
+
+``` text
+Desired replicas = 4
+maxSurge = 1
+Maximum Pods = 5
+
+maxUnavailable = 1
+Minimum available = 3
+```
+
+## Key learning
+
+``` text
+maxSurge       = extra Pods allowed
+maxUnavailable = unavailable Pods allowed
+```
+
+The exact observed sequence can be fast and may not visibly show all
+intermediate states.
+
+------------------------------------------------------------------------
+
+# Question 5 -- Deploy a Broken Image and Observe a Stalled Rollout
+
+## Objective
+
+Deploy an invalid image and understand what a stalled rollout looks
+like.
+
+Change the image to an intentionally invalid image:
+
+``` yaml
+image: nginx:doesnotexist
+```
+
+Apply:
+
+``` bash
+kubectl apply -f deployment.yaml
+```
+
+Watch:
+
+``` bash
+kubectl get pods -w
+```
+
+Check rollout:
+
+``` bash
+kubectl rollout status deployment nginx-deployment
+```
+
+Use a timeout for the lab:
+
+``` bash
+kubectl rollout status deployment nginx-deployment --timeout=60s
+```
+
+The new Pod may show:
+
+``` text
+ErrImagePull
+```
+
+or:
+
+``` text
+ImagePullBackOff
+```
+
+Investigate:
+
+``` bash
+kubectl describe pod <new-pod-name>
+kubectl get rs
+kubectl describe deployment nginx-deployment
+```
+
+## Healthy rollout
+
+``` text
+New Pods become Ready
+        |
+        v
+Rollout completes
+```
+
+## Stalled rollout
+
+``` text
+New Pods fail
+     |
+     v
+Pods do not become Ready
+     |
+     v
+Deployment waits
+     |
+     v
+Rollout does not complete
+```
+
+## Important
+
+`ImagePullBackOff` is an image-pull problem.
+
+`CrashLoopBackOff` is different: the container starts but repeatedly
+crashes.
+
+------------------------------------------------------------------------
+
+# Question 6 + 7 -- Revision History and Specific Rollback
+
+## Objective
+
+Create several revisions, inspect revision history, identify a specific
+revision, roll back to it, and verify the result.
+
+This combines rollout history and rollback into one practical exercise.
+
+## Step 1 -- Create revisions
+
+Example:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.26
+kubectl rollout status deployment nginx-deployment
+```
+
+Then:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.27
+kubectl rollout status deployment nginx-deployment
+```
+
+Then:
+
+``` bash
+kubectl set image deployment nginx-deployment nginx=nginx:1.28
+kubectl rollout status deployment nginx-deployment
+```
+
+## Step 2 -- View history
+
+``` bash
+kubectl rollout history deployment nginx-deployment
+```
+
+Example:
+
+``` text
+REVISION
+11
+12
+13
+```
+
+Your actual revision numbers may be different.
+
+## Step 3 -- Inspect a specific revision
+
+Example:
+
+``` bash
+kubectl rollout history deployment nginx-deployment --revision=11
+```
+
+This can show the Pod template and image associated with that revision.
+
+## Step 4 -- Roll back
+
+Example:
+
+``` bash
+kubectl rollout undo deployment nginx-deployment --to-revision=11
+```
+
+Check:
+
+``` bash
+kubectl rollout status deployment nginx-deployment
+```
+
+Verify image:
+
+``` bash
+kubectl get deployment nginx-deployment \
+  -o=jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+Verify Pods:
+
+``` bash
+kubectl get pods
+```
+
+## Key learning
+
+``` text
+Update
+  |
+New revision
+  |
+Another update
+  |
+Another revision
+  |
+rollout history
+  |
+Select revision
+  |
+rollout undo --to-revision=N
+  |
+Rollback
+```
+
+Always use the revision number actually returned by your cluster.
+
+------------------------------------------------------------------------
+
+# Question 8 -- RollingUpdate vs Recreate
+
+## Objective
+
+Compare RollingUpdate and Recreate behavior.
+
+## RollingUpdate example
+
+``` yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 1
+```
+
+Conceptually:
+
+``` text
+Old Old Old Old
+       |
+Old Old Old New
+       |
+Old Old New New
+       |
+Old New New New
+       |
+New New New New
+```
+
+Old and new Pods can temporarily coexist.
+
+## Recreate example
+
+``` yaml
+strategy:
+  type: Recreate
+```
+
+Conceptually:
+
+``` text
+Old Old Old
+     |
+   No Pods
+     |
+New New New
+```
+
+All old Pods are terminated before new Pods are created.
+
+## Practical comparison
+
+  -----------------------------------------------------------------------
+  RollingUpdate                       Recreate
+  ----------------------------------- -----------------------------------
+  Gradually replaces Pods             Terminates all old Pods first
+
+  Old/new versions can coexist        Old/new versions do not coexist
+
+  Designed to maintain availability   Causes a downtime window
+
+  Uses maxSurge/maxUnavailable        These RollingUpdate settings do not
+                                      apply
+
+  Common for web applications         Useful when versions cannot coexist
+  -----------------------------------------------------------------------
+
+## Measuring downtime
+
+Watch:
+
+``` bash
+kubectl get pods -w
+```
+
+Record when the old Pods disappear and when the new Pods become Ready.
+
+For a realistic application test, use a Service and observe its
+endpoints:
+
+``` bash
+kubectl get endpoints <service-name> -w
+```
+
+Do not use example downtime numbers as actual measurements. Record the
+timing from your own cluster.
+
+------------------------------------------------------------------------
+
+# Final 8-Lab Summary
+
+``` text
+1. Pod deletion
+   -> ReplicaSet self-healing
+
+2. Scaling
+   -> kubectl scale + YAML
+
+3. Image update
+   -> RollingUpdate
+
+4. maxSurge / maxUnavailable
+   -> Controlled rollout limits
+
+5. Broken image
+   -> Stalled rollout + troubleshooting
+
+6. Rollout history
+   -> Revision management
+
+7. Rollback
+   -> Roll back to specific revision
+
+8. RollingUpdate vs Recreate
+   -> Availability and downtime comparison
+```
+
+# Interview Command Cheat Sheet
+
+``` bash
+kubectl apply -f deployment.yaml
+
+kubectl get deployment
+kubectl describe deployment <name>
+
+kubectl get pods
+kubectl get pods -w
+
+kubectl get rs
+
+kubectl delete pod <pod-name>
+
+kubectl scale deployment <name> --replicas=4
+
+kubectl set image deployment <name> <container>=<image>
+
+kubectl rollout status deployment <name>
+
+kubectl rollout history deployment <name>
+
+kubectl rollout history deployment <name> --revision=<number>
+
+kubectl rollout undo deployment <name>
+
+kubectl rollout undo deployment <name> --to-revision=<number>
+
+kubectl rollout restart deployment <name>
+```
+
+# LinkedIn Documentation Tip
+
+For LinkedIn, do not post all commands without context. Show:
+
+**Objective → Configuration → Commands → Observation → Key Learning**
+
+This makes the documentation demonstrate hands-on DevOps understanding
+rather than just command memorization.
